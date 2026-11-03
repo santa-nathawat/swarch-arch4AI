@@ -1,8 +1,8 @@
 # Tutorial 6 worksheet: serving patterns
 
-**Name / ชื่อ:**
+**Name / ชื่อ:** Santa
 
-**Student ID / รหัสนิสิต:**
+**Student ID / รหัสนิสิต:** 6732010421
 
 This is **individual work**: each student completes and submits their own copy, in their own fork.
 
@@ -16,8 +16,8 @@ Copy result rows from `results/runs.csv` (or the load test's output) into the ta
 
 | Run | p50 ms | p95 ms | accuracy | large calls |
 |---|---|---|---|---|
-| t0-large | | | | |
-| t0-small | | | | |
+| t0-large | 492 | 586 | 93.5% | 100% |
+| t0-small | 12 | 30 | 72.5% | 0% |
 
 **Q0.** What does the large model buy, and what does it cost?
 
@@ -29,8 +29,8 @@ Copy result rows from `results/runs.csv` (or the load test's output) into the ta
 
 | Run | run time (s) | p50 ms | p95 ms | errors | pending | accuracy |
 |---|---|---|---|---|---|---|
-| t1-before | | | | | | |
-| t1-after | | | | | | |
+| t1-before | not recorded | 240 | 419 | 21 | 0 | 92.7% |
+| t1-after | not recorded | 387 | 1006 | 0 | 28 | 93.0% |
 
 **Q1.1** In `t1-before`, p50 can look *better* than the baseline. Why is p50 misleading here? Which column tells the real story?
 
@@ -60,10 +60,10 @@ Copy result rows from `results/runs.csv` (or the load test's output) into the ta
 
 | Run | threshold | p50 ms | p95 ms | accuracy | large calls |
 |---|---|---|---|---|---|
-| t2-0.6 | 0.6 | | | | |
-| t2-0.7 | 0.7 | | | | |
-| t2-0.8 | 0.8 | | | | |
-| t2-0.9 | 0.9 | | | | |
+| t2-0.6 | 0.6 | 6 | 541 | 91.5% | 38% |
+| t2-0.7 | 0.7 | 371 | 583 | 93.0% | 53% |
+| t2-0.8 | 0.8 | 503 | 711 | 93.5% | 64% |
+| t2-0.9 | 0.9 | 479 | 644 | 93.5% | 77% |
 
 **Q2.1** Which threshold would you deploy for CampusEats, and why? Name the quality you give up.
 
@@ -87,7 +87,7 @@ Copy result rows from `results/runs.csv` (or the load test's output) into the ta
 
 | Run | p50 ms | p95 ms | accuracy | large calls | cache hits |
 |---|---|---|---|---|---|
-| t3-cache | | | | | |
+| t3-cache | 6 | 564 | 93.0% | 38% | 35% |
 
 **Q3.1** Which reviews benefit from the cache, and which never will?
 
