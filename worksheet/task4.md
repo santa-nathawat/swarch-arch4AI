@@ -8,7 +8,7 @@ This is **individual work**: each student completes and submits their own copy, 
 
 *งานนี้เป็น**งานเดี่ยว** นิสิตแต่ละคนทำและส่งงานของตัวเอง ใน fork ของตัวเอง*
 
-**Scenario (A, B or C) / Scenario ที่เลือก:**
+**Scenario (A, B or C) / Scenario ที่เลือก:** A (Owner alerts). Student ID ends in 1 (odd) so A or B allowed.
 
 Choose **one** scenario below. If the last digit of your student ID is odd, take A or B; if it is even, take B or C. Use your measurements from Tutorial 6 as evidence: cite run names from `results/runs.csv`. Answer in Thai or English.
 
@@ -58,9 +58,9 @@ The three most important quality requirements for your scenario, each with a num
 
 | # | Quality | Requirement |
 |---|---|---|
-| 1 | | |
-| 2 | | |
-| 3 | | |
+| 1 | Accuracy / precision of alerts | A negative alert must be correct; label accuracy at least 93% (close to large-only 93.5%), and only alert when the label is trustworthy. Missing an alert is OK, a wrong one is not. |
+| 2 | Performance | Owner gets the push notification within 2 s of the review being posted, at the 40 reviews/s lunch peak. |
+| 3 | Capacity / cost | Large model calls at peak must stay under 20 calls/s (aim for about 15/s to have headroom), and as few as possible since every call costs money. |
 
 ## 2. Design / การออกแบบ
 
@@ -68,16 +68,32 @@ Your topology, the patterns you add, and a container-level diagram (C4 level 2).
 
 *topology ที่เลือก pattern ที่เพิ่ม และ diagram ระดับ container (C4 level 2) เขียนด้วย Mermaid*
 
+Topology: **T3 Hybrid**. The small model runs as a library inside the review service, the large model stays a remote inference service. Patterns: **cascade** (threshold 0.7), **cache** (LRU, key = model version + normalized text) in front of it, and **fallback** (1 s timeout, then save as pending, no alert). The notification is sent async from an event so posting the review isn't blocked. An alert is only sent if the final label is negative and it came from the large model or from a cached large/high-confidence answer; if we fall back to pending, we just skip the alert (missed alert is acceptable, wrong one is not).
+
 ```mermaid
 C4Container
-    title Your design: container diagram
-    %% Replace the example below with your own people, containers and relationships.
-    %% See the CampusEats C4 diagram in README.md for the full syntax.
-    Person(customer, "Customer", "Writes restaurant reviews")
+    title Scenario A (owner alerts): hybrid cascade + cache + fallback
+    Person(customer, "Customer", "Writes restaurant reviews, 40/s at lunch peak")
+    Person(owner, "Restaurant owner", "Gets push alert for negative reviews")
     System_Boundary(campuseats, "CampusEats") {
-        Container(review, "Review service", "Python, FastAPI", "What it does")
+        Container(gateway, "API gateway", "Python, FastAPI", "Single entry point for clients")
+        Container(review, "Review service", "Python, FastAPI + small model library", "Stores reviews, LRU cache, runs small model, cascade at 0.7, 1 s timeout fallback to pending")
+        Container(inference, "Inference service", "Python, FastAPI, large model", "Large model only, max 20 calls/s")
+        ContainerQueue(broker, "Message broker", "Queue", "review.labeled events and pending reviews")
+        Container(notifier, "Notification service", "Python", "Sends push only for trusted negative labels")
+        Container(batch, "Re-label batch job", "Python", "Re-scores pending reviews later, no alert")
     }
-    Rel(customer, review, "Posts reviews", "HTTP/JSON")
+    System_Ext(push, "Push provider", "FCM / APNs")
+    Rel(customer, gateway, "Posts review", "HTTP/JSON")
+    Rel(gateway, review, "Forwards request", "HTTP/JSON")
+    Rel(review, inference, "POST /predict only if small confidence < 0.7 and cache miss", "REST, 1 s timeout")
+    Rel(review, broker, "Publishes labeled / pending review", "async")
+    Rel(broker, notifier, "review.labeled (negative)", "async")
+    Rel(broker, batch, "pending reviews", "async")
+    Rel(batch, inference, "Scores off-peak", "REST")
+    Rel(notifier, push, "Send alert", "HTTPS")
+    Rel(push, owner, "Push notification", "< 2 s")
+    UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")
 ```
 
 ## 3. Evidence / หลักฐาน
@@ -88,8 +104,14 @@ Which runs support your choice? Show the numbers and, for scenario A, the capaci
 
 | Run | What it shows / แสดงอะไร |
 |---|---|
-| | |
-| | |
+| t0-large | Large only: 93.5% acc but 100% large calls. 100% x 40 req/s = 40 calls/s, 2x over the 20/s limit, so T1 alone can't work at peak. |
+| t0-small | Small only: 72.5% acc, way too many wrong alerts, even though p95 is 30 ms. |
+| t2-0.7 | Cascade 0.7: 93.0% acc, 53% large calls. 53% x 40 = ~21 calls/s > 20/s, so cascade alone is still just over the limit. |
+| t2-0.6 | Cascade 0.6: 38% large (15 calls/s) but acc 91.5%, more wrong alerts, so I don't want to lower the threshold to fix capacity. |
+| t3-cache | Cascade 0.7 + cache: 93.0% acc kept, 35% cache hits, large calls 38%. 38% x 40 = 15.2 calls/s < 20/s (about 24% headroom). p50 6 ms, p95 564 ms, well under 2 s. |
+| t1-after | Fallback: when large model hangs, 0 errors, 28 pending, p95 1006 ms. Still under 2 s, reviews are not lost, and we just skip alerts for pending ones. |
+
+Capacity at peak: 40 req/s x 38% large calls (t3-cache) = **~15.2 large calls/s**, below the 20 calls/s limit. Without the cache: 40 x 53% = ~21 calls/s, over the limit.
 
 ## 4. ADR
 
@@ -97,20 +119,20 @@ Use the ADR format from W5.
 
 *ใช้รูปแบบ ADR จาก W5*
 
-**Title:**
+**Title:** Use hybrid topology (small model in review service + remote large model) with cascade 0.7, LRU cache and timeout fallback for owner alerts
 
 **Status:** Proposed
 
-**Context:**
+**Context:** Owners need a push alert for negative reviews within 2 s, at a peak of 40 reviews/s. Wrong alerts kill trust, missed alerts are OK. The large model is accurate (93.5%, t0-large) but only does 20 calls/s and costs money; sending everything to it needs 40 calls/s. The small model is fast (p95 30 ms) but only 72.5% accurate (t0-small). Cascade at 0.7 alone needs 53% x 40 = ~21 calls/s (t2-0.7), just over the limit.
 
-**Decision:**
+**Decision:** Use T3 hybrid: the small model runs as a library in the review service, the large model stays a remote service. Check an LRU cache first (key = model version + normalized text), then run the cascade with threshold 0.7, calling the large model only for low-confidence reviews, with a 1 s timeout that falls back to pending. Publish labeled reviews to a broker; the notification service only alerts on negative labels, and pending reviews get re-labeled by a batch job with no alert.
 
 **Consequences:**
-- Positive:
-- Negative:
+- Positive: Large calls drop to about 38% x 40 = 15.2 calls/s (t3-cache), under the 20/s limit with some headroom and much cheaper than 100%. Accuracy stays 93.0%, almost the same as large-only. p50 6 ms and p95 564 ms (and 1006 ms with hangs, t1-after) fit the 2 s alert budget. A hung large model doesn't break posting (0 errors in t1-after).
+- Negative: Headroom depends on the cache hit rate (35%); if lunch reviews are less repetitive, we go back to ~21 calls/s and need rate limiting or to send overflow to pending. The small model can still be confidently wrong (sarcasm, negation) and cause a wrong alert. More moving parts (cache invalidation on model update, broker, batch job), and pending reviews never get a real-time alert.
 
 **Alternatives considered:** at least one topology you rejected, and why.
 
 *อย่างน้อยหนึ่ง topology ที่ไม่เลือก และเหตุผล*
 
->
+> T1 (sync large model for every review) rejected: needs 40 calls/s at peak, 2x the limit (t0-large), so requests would queue and blow the 2 s budget. T2 (small model only, as a library) rejected: fast but 72.5% accuracy (t0-small) means lots of wrong alerts, which is exactly what this scenario can't accept. T4 (pure async/batch) rejected as the main path because batching can't guarantee alerts within 2 s, but I still use it for re-labeling pending reviews. Also rejected just lowering the threshold to 0.6 (38% large, t2-0.6) because accuracy drops to 91.5% and that means more wrong alerts.
